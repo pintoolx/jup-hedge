@@ -51,7 +51,6 @@ export function useJitoBundle(): UseJitoBundleResult {
           connection,
           publicKey,
           tipLamports,
-          JITO_ENDPOINTS.AMSTERDAM
         );
 
         // Combine all transactions + tip

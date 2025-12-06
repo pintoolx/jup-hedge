@@ -9,19 +9,6 @@ import axios from "axios";
 
 const DEFAULT_TIP_LAMPORTS = 10_000; // 0.00001 SOL minimum
 
-// Hardcoded Jito tip accounts (these rarely change)
-
-const JITO_TIP_ACCOUNTS = [
-  '96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5',
-  'HFqU5x63VTqvQss8hp11i4bVmkdzGzXYPG3KFdtj6nj',
-  'Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY',
-  'ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt6iGPaS49',
-  'DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh',
-  'ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt',
-  'DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL',
-  '3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT',
-];
-
 /**
  * Get a random Jito tip account (no API call needed)
  */
@@ -65,8 +52,7 @@ export async function getTipAccounts(
 export async function createTipTransaction(
   connection: Connection,
   payerPubkey: PublicKey,
-  tipLamports: number = DEFAULT_TIP_LAMPORTS,
-  _endpoint: string = JITO_ENDPOINTS.AMSTERDAM
+  tipLamports: number = DEFAULT_TIP_LAMPORTS
 ): Promise<VersionedTransaction> {
   // Select random tip account to reduce contention
   const tipAccount = await getRandomTipAccount();
@@ -96,7 +82,6 @@ export async function createTipTransaction(
  */
 export async function sendBundle(
   transactions: VersionedTransaction[],
-  endpoint: string = JITO_ENDPOINTS.AMSTERDAM
 ): Promise<string> {
   // Serialize transactions to base64
   const encodedTransactions = transactions.map((transaction) =>
@@ -104,6 +89,7 @@ export async function sendBundle(
   );
 
   console.log('Sending bundle with transactions:', encodedTransactions);
+  console.log('Transaction count:', encodedTransactions.length);
 
   const response = await axios.post("https://amsterdam.mainnet.block-engine.jito.wtf/api/v1/bundles", {
     jsonrpc: '2.0',
@@ -129,7 +115,6 @@ export async function sendBundle(
  */
 export async function getBundleStatuses(
   bundleIds: string[],
-  endpoint: string = JITO_ENDPOINTS.AMSTERDAM
 ): Promise<(BundleStatus | null)[]> {
   const response = await axios.post("https://amsterdam.mainnet.block-engine.jito.wtf/api/v1/getBundleStatuses", {
     jsonrpc: '2.0',
@@ -151,7 +136,6 @@ export async function getBundleStatuses(
  */
 export async function getBundleInflightStatuses(
   bundleIds: string[],
-  endpoint: string = JITO_ENDPOINTS.AMSTERDAM
 ): Promise<(BundleStatus | null)[]> {
   const response = await axios.post("https://amsterdam.mainnet.block-engine.jito.wtf/api/v1/getInflightBundleStatuses", {
     jsonrpc: '2.0',
@@ -173,7 +157,6 @@ export async function getBundleInflightStatuses(
  */
 export async function waitForBundleConfirmation(
   bundleId: string,
-  endpoint: string = JITO_ENDPOINTS.AMSTERDAM,
   timeoutMs: number = 60000,
   pollIntervalMs: number = 2000
 ): Promise<JitoBundleResult> {
@@ -181,10 +164,10 @@ export async function waitForBundleConfirmation(
 
   while (Date.now() - startTime < timeoutMs) {
     try {
-      const statuses = await getBundleStatuses([bundleId], endpoint);
+      const statuses = await getBundleStatuses([bundleId]);
       console.log('Bundle statuses:', statuses);
       await new Promise((resolve) => setTimeout(resolve, 1000));
-      const inflightStatuses = await getBundleInflightStatuses([bundleId], endpoint);
+      const inflightStatuses = await getBundleInflightStatuses([bundleId]);
       console.log('Bundle inflight statuses:', inflightStatuses);
       await new Promise((resolve) => setTimeout(resolve, 1000));
       const status = statuses[0];
@@ -228,10 +211,10 @@ export async function submitAndConfirmBundle(
 ): Promise<JitoBundleResult> {
   try {
     console.log(`Submitting bundle with ${transactions.length} transactions...`);
-    const bundleId = await sendBundle(transactions, "https://tokyo.mainnet.block-engine.jito.wtf/api/v1/bundles");
+    const bundleId = await sendBundle(transactions);
     console.log(`Bundle submitted: ${bundleId}`);
 
-    return await waitForBundleConfirmation(bundleId, "https://tokyo.mainnet.block-engine.jito.wtf/api/v1/getBundleStatuses", timeoutMs);
+    return await waitForBundleConfirmation(bundleId, timeoutMs);
   } catch (error) {
     return {
       bundleId: '',

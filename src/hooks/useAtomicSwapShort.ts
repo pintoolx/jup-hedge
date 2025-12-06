@@ -180,8 +180,7 @@ export function useAtomicSwapShort(): UseAtomicSwapShortResult {
         const tipTx = await createTipTransaction(
           connection,
           publicKey,
-          jitoTipLamports,
-          JITO_ENDPOINTS.AMSTERDAM
+          jitoTipLamports
         );
         transactions.push(tipTx);
 
