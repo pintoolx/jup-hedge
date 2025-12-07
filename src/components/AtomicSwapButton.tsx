@@ -45,8 +45,8 @@ export const AtomicSwapButton: React.FC<AtomicSwapButtonProps> = ({
       return;
     }
 
-    if (config.solAmount <= 0 || config.shortAmount <= 0 || config.transferAmount <= 0) {
-      alert('All amounts must be greater than 0');
+    if (config.shortAmount <= 0 || config.transferAmount <= 0) {
+      alert('Short amount and transfer amount must be greater than 0');
       return;
     }
 

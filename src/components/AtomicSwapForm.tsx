@@ -72,19 +72,17 @@ export const AtomicSwapForm: React.FC<AtomicSwapFormProps> = ({ className }) => 
 
       {/* Configuration Form */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-        {/* SOL Amount */}
-        <div>
-          <label style={{ display: 'block', marginBottom: '4px', fontSize: '14px' }}>
-            SOL to Swap
-          </label>
-          <input
-            type="number"
-            step="0.01"
-            value={config.solAmount}
-            onChange={(e) => handleInputChange('solAmount', e.target.value)}
-            style={inputStyle}
-            placeholder="0.1"
-          />
+        {/* SOL Amount - Now auto-calculated for minimum 250 JUP */}
+        <div
+          style={{
+            padding: '12px',
+            backgroundColor: '#1e293b',
+            borderRadius: '8px',
+            fontSize: '14px',
+            color: '#94a3b8',
+          }}
+        >
+          <strong style={{ color: '#e2e8f0' }}>SOL to Swap:</strong> Auto-calculated for minimum 250 JUP (with 5% buffer)
         </div>
 
         {/* Deposit Amount */}
@@ -199,7 +197,7 @@ export const AtomicSwapForm: React.FC<AtomicSwapFormProps> = ({ className }) => 
         }}
       >
         <div style={{ fontWeight: 'bold', marginBottom: '8px' }}>Transaction Summary:</div>
-        <div>1. Swap {config.solAmount} SOL → JUP (Jupiter)</div>
+        <div>1. Swap SOL → ~250+ JUP (Jupiter, auto-calculated)</div>
         {config.depositAmount && config.depositAmount > 0 ? (
           <div>2. Deposit {config.depositAmount} USDC + Short {config.shortAmount} JUP-PERP (Drift)</div>
         ) : (
