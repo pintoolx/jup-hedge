@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { VersionedTransaction } from '@solana/web3.js';
 import { DriftClient } from '@drift-labs/sdk';
-import { buildJupiterSwapTransaction } from '../utils/jupiter';
+import { buildJupiterSwapTransaction } from '../utils/jupiter_swap';
 import {
   BrowserWallet,
   initializeDriftClient,
@@ -102,8 +102,13 @@ export function useAtomicSwapShort(): UseAtomicSwapShortResult {
           'JUP',
           solAmount
         );
-        
-        transactions.push(swapTx);
+
+        //transactions.push(swapTx);
+
+        // Extract blockhash from Jupiter's transaction to use for all other transactions
+        // This ensures bundle atomicity - all transactions use the same blockhash
+        const sharedBlockhash = swapTx.message.recentBlockhash;
+        console.log('Using shared blockhash for bundle:', sharedBlockhash);
 
         setProgress({
           step: 'building_swap',
@@ -128,15 +133,18 @@ export function useAtomicSwapShort(): UseAtomicSwapShortResult {
         driftClient = await initializeDriftClient(connection, browserWallet);
 
         // Build short transaction with optional deposit included
+        // Pass sharedBlockhash to ensure all bundle transactions use the same blockhash
         const shortTx = await buildDriftShortTransaction(
           connection,
           publicKey,
           driftClient,
           'JUP-PERP',
           shortAmount,
-          depositAmount // Will be included in the same transaction if specified
+          depositAmount, // Will be included in the same transaction if specified
+          0, // subAccountId
+          sharedBlockhash
         );
-        transactions.push(shortTx);
+        //transactions.push(shortTx);
 
         // Cleanup Drift client
         await cleanupDriftClient(driftClient);
@@ -160,7 +168,8 @@ export function useAtomicSwapShort(): UseAtomicSwapShortResult {
           publicKey,
           'JUP',
           targetAddress,
-          transferAmount
+          transferAmount,
+          sharedBlockhash
         );
         transactions.push(transferTx);
 
@@ -180,7 +189,8 @@ export function useAtomicSwapShort(): UseAtomicSwapShortResult {
         const tipTx = await createTipTransaction(
           connection,
           publicKey,
-          jitoTipLamports
+          jitoTipLamports,
+          sharedBlockhash
         );
         transactions.push(tipTx);
 
@@ -202,7 +212,8 @@ export function useAtomicSwapShort(): UseAtomicSwapShortResult {
         });
 
         const bundleResult = await submitAndConfirmBundle(
-          signedTransactions
+          signedTransactions,
+          connection
         );
 
         if (bundleResult.success) {

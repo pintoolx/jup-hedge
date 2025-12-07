@@ -5,8 +5,6 @@ import {
   TransactionMessage,
   TransactionInstruction,
   ComputeBudgetProgram,
-  Transaction,
-  TransactionVersion,
 } from '@solana/web3.js';
 import {
   DriftClient,
@@ -31,28 +29,26 @@ import { TOKEN_ADDRESS, DRIFT_SPOT_MARKETS } from '../types';
  */
 export class BrowserWallet implements IWallet {
   public publicKey: PublicKey;
-  // Add supportedTransactionVersions property to satisfy IWallet interface
-  // Set to undefined as in some wallet adapter implementations, or explicit set to handle versions
-  public supportedTransactionVersions?: ReadonlySet<TransactionVersion> = new Set(['legacy', 0]);
+  public supportedTransactionVersions?: ReadonlySet<'legacy' | 0> = new Set(['legacy', 0]);
 
-  private _signTransaction: <T extends Transaction | VersionedTransaction>(tx: T) => Promise<T>;
-  private _signAllTransactions: <T extends Transaction | VersionedTransaction>(txs: T[]) => Promise<T[]>;
+  private _signTransaction: <T extends VersionedTransaction>(tx: T) => Promise<T>;
+  private _signAllTransactions: <T extends VersionedTransaction>(txs: T[]) => Promise<T[]>;
 
   constructor(
     publicKey: PublicKey,
-    signTransaction: <T extends Transaction | VersionedTransaction>(tx: T) => Promise<T>,
-    signAllTransactions: <T extends Transaction | VersionedTransaction>(txs: T[]) => Promise<T[]>
+    signTransaction: <T extends VersionedTransaction>(tx: T) => Promise<T>,
+    signAllTransactions: <T extends VersionedTransaction>(txs: T[]) => Promise<T[]>
   ) {
     this.publicKey = publicKey;
     this._signTransaction = signTransaction;
     this._signAllTransactions = signAllTransactions;
   }
 
-  async signTransaction(tx: Transaction): Promise<Transaction> {
+  async signTransaction(tx: any): Promise<any> {
     return this._signTransaction(tx);
   }
 
-  async signAllTransactions(txs: Transaction[]): Promise<Transaction[]> {
+  async signAllTransactions(txs: any[]): Promise<any[]> {
     return this._signAllTransactions(txs);
   }
 
@@ -64,7 +60,6 @@ export class BrowserWallet implements IWallet {
     return this._signAllTransactions(txs);
   }
 
-  // Drift SDK also expects these for some operations
   get payer() {
     return {
       publicKey: this.publicKey,
@@ -90,7 +85,6 @@ export async function initializeDriftClient(
   connection: Connection,
   wallet: BrowserWallet
 ): Promise<DriftClient> {
-  // Initialize Drift SDK (browser-safe)
   const sdkConfig = initialize({ env: 'mainnet-beta' });
 
   const driftClient = new DriftClient({
@@ -103,7 +97,6 @@ export async function initializeDriftClient(
   await driftClient.subscribe();
   
   // Wait for subscription to be ready
-  // This ensures market data is available
   await new Promise((resolve) => setTimeout(resolve, 2000));
   
   return driftClient;
@@ -111,11 +104,6 @@ export async function initializeDriftClient(
 
 /**
  * Build USDC deposit instruction for Drift margin account
- * @param driftClient - Initialized DriftClient
- * @param usdcAmount - Amount of USDC to deposit (in human readable format, e.g., 10 for 10 USDC)
- * @param subAccountId - Sub account ID (default 0)
- * @param userInitialized - Whether the user account is already initialized (or will be initialized in the same tx)
- * @returns TransactionInstruction for deposit
  */
 export async function buildDepositInstruction(
   driftClient: DriftClient,
@@ -123,26 +111,21 @@ export async function buildDepositInstruction(
   subAccountId: number = 0,
   userInitialized: boolean = true
 ): Promise<TransactionInstruction> {
-  // Convert to USDC precision (6 decimals)
   const amount = new BN(usdcAmount * 1e6);
-  
-  // USDC spot market index is 0 (QUOTE_SPOT_MARKET_INDEX)
   const spotMarketIndex = DRIFT_SPOT_MARKETS.USDC;
   
-  // Get user's USDC associated token account
   const usdcMint = new PublicKey(TOKEN_ADDRESS.USDC);
   const userTokenAccount = await getAssociatedTokenAddress(
     usdcMint,
     driftClient.wallet.publicKey
   );
   
-  // Get deposit instruction
   const depositIx = await driftClient.getDepositInstruction(
     amount,
     spotMarketIndex,
     userTokenAccount,
     subAccountId,
-    false, // reduceOnly
+    false,
     userInitialized
   );
   
@@ -151,12 +134,6 @@ export async function buildDepositInstruction(
 
 /**
  * Build Drift short position instructions
- * Returns instructions that need to be wrapped in a transaction
- * @param driftClient - Initialized DriftClient
- * @param marketIndex - Perp market index
- * @param baseAssetAmount - Amount to short (in human readable format)
- * @param depositAmount - Optional USDC amount to deposit before opening position
- * @param subAccountId - Sub account ID (default 0)
  */
 export async function buildDriftShortInstructions(
   driftClient: DriftClient,
@@ -167,25 +144,21 @@ export async function buildDriftShortInstructions(
 ): Promise<TransactionInstruction[]> {
   const instructions: TransactionInstruction[] = [];
 
-  // Check if user account exists, if not add initialization instructions
+  // Check if user account exists
   let userInitialized = true;
   try {
     driftClient.getUser(subAccountId);
-    // User exists, no initialization needed
   } catch {
     userInitialized = false;
-    // User doesn't exist, need to initialize
     const [initIxs] = await driftClient.getInitializeUserAccountIxs(subAccountId);
     instructions.push(...initIxs);
   }
 
   // Add deposit instruction if depositAmount is specified
   if (depositAmount && depositAmount > 0) {
-    // Convert to USDC precision (6 decimals)
     const amount = new BN(depositAmount * 1e6);
     const spotMarketIndex = DRIFT_SPOT_MARKETS.USDC;
     
-    // Get user's USDC associated token account
     const usdcMint = new PublicKey(TOKEN_ADDRESS.USDC);
     const userTokenAccount = await getAssociatedTokenAddress(
       usdcMint,
@@ -197,8 +170,8 @@ export async function buildDriftShortInstructions(
       spotMarketIndex,
       userTokenAccount,
       subAccountId,
-      false, // reduceOnly
-      userInitialized || instructions.length > 0 // user will be initialized if we added init instructions
+      false,
+      userInitialized || instructions.length > 0
     );
     instructions.push(depositIx);
   }
@@ -214,17 +187,15 @@ export async function buildDriftShortInstructions(
   const price = oracleData.price;
 
   // Build order params for market short
-  // For SHORT: we want to sell, so we set a lower limit price (95% of current) for protection
   const orderParams = getOrderParams({
     orderType: OrderType.MARKET,
     marketType: MarketType.PERP,
     marketIndex,
     direction: PositionDirection.SHORT,
     baseAssetAmount: baseAmount,
-    price: price.mul(new BN(95)).div(new BN(100)), // 5% slippage protection (lower bound for selling)
+    price: price.mul(new BN(95)).div(new BN(100)),
   });
 
-  // Get place order instruction
   const shortIx = await driftClient.getPlacePerpOrderIx(orderParams, subAccountId);
   instructions.push(shortIx);
 
@@ -232,18 +203,22 @@ export async function buildDriftShortInstructions(
 }
 
 /**
- * Build USDC deposit transaction (unsigned)
+ * Build USDC deposit transaction (unsigned) using Legacy Message
+ * 
+ * Uses Legacy Message instead of V0 to ensure Jito bundle compatibility
+ * (Jito does not support Address Lookup Tables)
  */
 export async function buildDriftDepositTransaction(
   connection: Connection,
   userPublicKey: PublicKey,
   driftClient: DriftClient,
   usdcAmount: number,
-  subAccountId: number = 0
+  subAccountId: number = 0,
+  recentBlockhash?: string
 ): Promise<VersionedTransaction> {
   const instructions: TransactionInstruction[] = [];
 
-  // Check if user account exists, if not add initialization instructions
+  // Check if user account exists
   let userInitialized = true;
   try {
     driftClient.getUser(subAccountId);
@@ -254,12 +229,11 @@ export async function buildDriftDepositTransaction(
   }
 
   // Add deposit instruction
-  // If we added init instructions, the user will be initialized when deposit executes
   const depositIx = await buildDepositInstruction(
-    driftClient, 
-    usdcAmount, 
+    driftClient,
+    usdcAmount,
     subAccountId,
-    userInitialized || instructions.length > 0 // true if user exists OR if init instructions were added
+    userInitialized || instructions.length > 0
   );
   instructions.push(depositIx);
 
@@ -271,28 +245,29 @@ export async function buildDriftDepositTransaction(
     microLamports: 1000,
   });
 
-  // Get recent blockhash
-  const { blockhash } = await connection.getLatestBlockhash('confirmed');
+  // Use provided blockhash or fetch new one
+  const blockhash = recentBlockhash ?? (await connection.getLatestBlockhash('confirmed')).blockhash;
 
-  // Build transaction
-  const messageV0 = new TransactionMessage({
+  // Build transaction using Legacy Message (Jito compatible - no ALT support)
+  const legacyMessage = new TransactionMessage({
     payerKey: userPublicKey,
     recentBlockhash: blockhash,
     instructions: [computeIx, priceIx, ...instructions],
-  }).compileToV0Message();
+  }).compileToLegacyMessage();
 
-  return new VersionedTransaction(messageV0);
+  const transaction = new VersionedTransaction(legacyMessage);
+
+  // Verify base64 serialization works
+  verifyTransactionSerializable(transaction);
+
+  return transaction;
 }
 
 /**
  * Build complete Drift short transaction with optional deposit (unsigned)
- * @param connection - Solana connection
- * @param userPublicKey - User's public key
- * @param driftClient - Initialized DriftClient
- * @param marketName - Market name (e.g., 'JUP-PERP')
- * @param baseAssetAmount - Amount to short
- * @param depositAmount - Optional USDC to deposit before shorting
- * @param subAccountId - Sub account ID
+ * 
+ * Uses Legacy Message instead of V0 to ensure Jito bundle compatibility
+ * (Jito does not support Address Lookup Tables)
  */
 export async function buildDriftShortTransaction(
   connection: Connection,
@@ -301,7 +276,8 @@ export async function buildDriftShortTransaction(
   marketName: string,
   baseAssetAmount: number,
   depositAmount?: number,
-  subAccountId: number = 0
+  subAccountId: number = 0,
+  recentBlockhash?: string
 ): Promise<VersionedTransaction> {
   const marketIndex = getPerpMarketIndex(marketName);
 
@@ -320,20 +296,55 @@ export async function buildDriftShortTransaction(
     units: computeUnits,
   });
   const priceIx = ComputeBudgetProgram.setComputeUnitPrice({
-    microLamports: 1000, // Low priority, using Jito tip instead
+    microLamports: 1000,
   });
 
-  // Get recent blockhash
-  const { blockhash } = await connection.getLatestBlockhash('confirmed');
+  // Use provided blockhash or fetch new one
+  const blockhash = recentBlockhash ?? (await connection.getLatestBlockhash('confirmed')).blockhash;
 
-  // Build transaction
-  const messageV0 = new TransactionMessage({
+  // Build transaction using Legacy Message (Jito compatible - no ALT support)
+  const legacyMessage = new TransactionMessage({
     payerKey: userPublicKey,
     recentBlockhash: blockhash,
     instructions: [computeIx, priceIx, ...instructions],
-  }).compileToV0Message();
+  }).compileToLegacyMessage();
 
-  return new VersionedTransaction(messageV0);
+  const transaction = new VersionedTransaction(legacyMessage);
+
+  // Verify base64 serialization works
+  verifyTransactionSerializable(transaction);
+
+  return transaction;
+}
+
+/**
+ * Verify transaction can be serialized to base64 (for Jito bundle)
+ * Throws if transaction is too large or has other serialization issues
+ */
+function verifyTransactionSerializable(transaction: VersionedTransaction): void {
+  try {
+    const serialized = transaction.serialize();
+    const base64 = Buffer.from(serialized).toString('base64');
+    
+    // Verify round-trip
+    const decoded = Buffer.from(base64, 'base64');
+    VersionedTransaction.deserialize(decoded);
+
+    // Check transaction size limit (1232 bytes max)
+    if (serialized.length > 1232) {
+      console.warn(`Transaction size (${serialized.length} bytes) exceeds limit. Consider splitting.`);
+    }
+  } catch (error) {
+    throw new Error(`Transaction serialization failed: ${error}`);
+  }
+}
+
+/**
+ * Get transaction as base64 string (for Jito bundle submission)
+ */
+export function getTransactionBase64(transaction: VersionedTransaction): string {
+  const serialized = transaction.serialize();
+  return Buffer.from(serialized).toString('base64');
 }
 
 /**

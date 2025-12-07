@@ -5,7 +5,7 @@ import {
   createTipTransaction,
   submitAndConfirmBundle,
 } from '../utils/jito';
-import { JITO_ENDPOINTS, JitoBundleResult, OperationState } from '../types';
+import { JitoBundleResult, OperationState } from '../types';
 
 export interface UseJitoBundleResult {
   submitBundle: (
@@ -63,7 +63,8 @@ export function useJitoBundle(): UseJitoBundleResult {
         // Submit bundle and wait for confirmation
         console.log('Submitting bundle to Jito...');
         const result = await submitAndConfirmBundle(
-          signedTransactions
+          signedTransactions,
+          connection
         );
 
         if (result.success) {
