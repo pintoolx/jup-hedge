@@ -87,7 +87,7 @@ export interface BundleStatus {
   err: any;
 }
 
-// Atomic operation config
+// Sequential operation config (replaces atomic Jito bundle)
 export interface AtomicOperationConfig {
   solAmount: number;
   shortAmount: number;
@@ -95,7 +95,6 @@ export interface AtomicOperationConfig {
   targetAddress: string;
   depositAmount?: number; // USDC to deposit to Drift before shorting
   slippageBps?: number;
-  jitoTipLamports?: number;
 }
 
 // Hook states
@@ -106,3 +105,11 @@ export interface OperationState<T = any> {
   data?: T;
   error?: string;
 }
+
+// Re-export sequential execution types
+export type {
+  TransactionExecutionStatus,
+  TransactionProgress,
+  SequentialExecutionResult,
+  TransactionToBuild,
+} from '../utils/sequential-executor';

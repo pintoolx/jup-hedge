@@ -2,6 +2,83 @@ import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { createJupiterApiClient, QuoteResponse } from '@jup-ag/api';
 import { TOKEN_ADDRESS, TokenTicker } from '../types';
 
+// Constants for minimum JUP output
+const MINIMUM_JUP_OUTPUT = 250;
+const BUFFER_PERCENTAGE = 1.05; // 5% buffer
+
+// Token mint addresses for price API
+const JUP_MINT = 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN';
+const SOL_MINT = 'So11111111111111111111111111111111111111112';
+
+/**
+ * Jupiter Price API response type
+ */
+interface JupiterPriceData {
+  usdPrice: number;
+  blockId: number;
+  decimals: number;
+  priceChange24h: number;
+}
+
+/**
+ * Fetch JUP and SOL prices from Jupiter Price API v3
+ * @returns Object containing JUP and SOL prices in USD
+ */
+export async function getJupiterPrices(): Promise<{ jupPrice: number; solPrice: number }> {
+  const options = {
+    method: 'GET',
+    headers: { 'x-api-key': import.meta.env.VITE_JUPITER_API_KEY || '' }
+  };
+
+  const response = await fetch(
+    `https://api.jup.ag/price/v3?ids=${JUP_MINT},${SOL_MINT}`,
+    options
+  );
+
+  if (!response.ok) {
+    throw new Error(`Jupiter Price API error: ${response.status}`);
+  }
+
+  const data: Record<string, JupiterPriceData> = await response.json();
+
+  if (!data[JUP_MINT] || !data[SOL_MINT]) {
+    throw new Error('Missing price data from Jupiter API');
+  }
+
+  return {
+    jupPrice: data[JUP_MINT].usdPrice,
+    solPrice: data[SOL_MINT].usdPrice,
+  };
+}
+
+/**
+ * Calculate required SOL amount to receive minimum 250 JUP
+ * Includes 5% buffer to ensure at least 250 JUP is received
+ * @returns Object containing calculated SOL amount and price info
+ */
+export async function calculateRequiredSolForMinimumJup(): Promise<{
+  solAmount: number;
+  jupPrice: number;
+  solPrice: number;
+  targetJupAmount: number;
+  minimumJupOutput: number;
+}> {
+  const { jupPrice, solPrice } = await getJupiterPrices();
+  const targetJupAmount = MINIMUM_JUP_OUTPUT * BUFFER_PERCENTAGE; // 262.5 JUP
+
+  // Calculate: targetJupAmount JUP * jupPriceUSD = X USD
+  // X USD / solPriceUSD = requiredSol
+  const requiredSol = (targetJupAmount * jupPrice) / solPrice;
+
+  return {
+    solAmount: requiredSol,
+    jupPrice,
+    solPrice,
+    targetJupAmount,
+    minimumJupOutput: MINIMUM_JUP_OUTPUT,
+  };
+}
+
 /**
  * Get token decimals (hardcoded for known tokens)
  */
@@ -91,24 +168,27 @@ export async function getJupiterQuote(
 /**
  * Build Jupiter swap transaction (unsigned)
  * Returns a VersionedTransaction that needs to be signed by wallet
- * 
+ *
  * Transaction is serialized/deserialized via base64 to ensure
  * compatibility with Jito bundle submission.
- * 
+ *
+ * NOTE: This function ignores the amount parameter and automatically
+ * calculates the required SOL amount to receive at least 250 JUP (with 5% buffer).
+ *
  * @param userPublicKey - User's public key
  * @param inputToken - Input token ticker (e.g., 'SOL')
  * @param outputToken - Output token ticker (e.g., 'JUP')
- * @param amount - Amount in human readable format
+ * @param _amount - IGNORED - Amount is calculated automatically for minimum 250 JUP
  * @param slippageBps - Slippage in basis points (default 50 = 0.5%)
- * @returns Transaction and expected output amount
+ * @returns Transaction, expected output amount, quote, and calculated SOL amount
  */
 export async function buildJupiterSwapTransaction(
   userPublicKey: PublicKey,
   inputToken: TokenTicker,
   outputToken: TokenTicker,
-  amount: number,
+  _amount: number,
   slippageBps: number = 50
-): Promise<{ transaction: VersionedTransaction; expectedOutput: number; quote: QuoteResponse }> {
+): Promise<{ transaction: VersionedTransaction; expectedOutput: number; quote: QuoteResponse; calculatedSolAmount: number }> {
   const inputMint = TOKEN_ADDRESS[inputToken];
   const outputMint = TOKEN_ADDRESS[outputToken];
 
@@ -119,10 +199,15 @@ export async function buildJupiterSwapTransaction(
     throw new Error(`Unknown output token: ${outputToken}`);
   }
 
+  // Calculate required SOL amount for minimum 250 JUP (with 5% buffer)
+  const { solAmount: calculatedSolAmount } = await calculateRequiredSolForMinimumJup();
+
+  console.log('Calculated SOL amount for minimum 250 JUP:', calculatedSolAmount);
+
   const jupiterApi = getJupiterClient();
 
-  // 1. Get quote
-  const quote = await getJupiterQuote(inputToken, outputToken, amount, slippageBps);
+  // 1. Get quote using calculated SOL amount
+  const quote = await getJupiterQuote(inputToken, outputToken, calculatedSolAmount, slippageBps);
 
   // 2. Get serialized swap transaction (base64 encoded from Jupiter API)
   // Use asLegacyTransaction to avoid Address Lookup Tables (Jito doesn't support ALTs)
@@ -181,6 +266,7 @@ export async function buildJupiterSwapTransaction(
     transaction,
     expectedOutput,
     quote,
+    calculatedSolAmount,
   };
 }
 

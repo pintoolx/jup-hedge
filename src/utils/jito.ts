@@ -1,9 +1,9 @@
-import { 
-  VersionedTransaction, 
-  PublicKey, 
-  SystemProgram, 
-  TransactionMessage, 
-  Connection 
+import {
+  VersionedTransaction,
+  PublicKey,
+  SystemProgram,
+  TransactionMessage,
+  Connection
 } from '@solana/web3.js';
 import { JITO_ENDPOINTS, JitoBundleResult, BundleStatus } from '../types';
 import axios from "axios";
@@ -12,6 +12,9 @@ import axios from "axios";
  * Jito JSON-RPC API client for browser
  * All transactions use Legacy Message for Jito bundle compatibility
  * (Jito does not support Address Lookup Tables)
+ *
+ * NOTE: These functions are used by useJitoBundle hook for atomic bundle execution.
+ * For sequential (non-atomic) execution, see sequential-executor.ts
  */
 
 const DEFAULT_TIP_LAMPORTS = 10_000; // 0.00001 SOL minimum

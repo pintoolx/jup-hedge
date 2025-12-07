@@ -1,6 +1,5 @@
 import { useState, useCallback } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
-import { VersionedTransaction } from '@solana/web3.js';
 import { DriftClient } from '@drift-labs/sdk';
 import { buildJupiterSwapTransaction } from '../utils/jupiter_swap';
 import {
@@ -10,22 +9,20 @@ import {
   cleanupDriftClient,
 } from '../utils/drift';
 import { buildTokenTransferTransaction } from '../utils/transfer';
-import { createTipTransaction, submitAndConfirmBundle } from '../utils/jito';
 import {
-  JITO_ENDPOINTS,
-  AtomicOperationConfig,
-  JitoBundleResult,
-} from '../types';
+  executeTransactionsSequentially,
+  TransactionToBuild,
+  SequentialExecutionResult,
+  TransactionProgress,
+} from '../utils/sequential-executor';
+import { AtomicOperationConfig } from '../types';
 
 export type AtomicOperationStep =
   | 'idle'
-  | 'building_swap'
-  | 'building_short'
-  | 'building_transfer'
-  | 'building_tip'
-  | 'signing'
-  | 'submitting'
-  | 'confirming'
+  | 'initializing'
+  | 'executing_swap'
+  | 'executing_short'
+  | 'executing_transfer'
   | 'success'
   | 'error';
 
@@ -33,17 +30,18 @@ export interface AtomicOperationProgress {
   step: AtomicOperationStep;
   message: string;
   swapExpectedOutput?: number;
+  currentTransaction?: number;
+  totalTransactions?: number;
+  transactionSignatures?: string[];
 }
 
 export interface UseAtomicSwapShortResult {
-  execute: (config: AtomicOperationConfig) => Promise<JitoBundleResult>;
+  execute: (config: AtomicOperationConfig) => Promise<SequentialExecutionResult>;
   progress: AtomicOperationProgress;
-  result: JitoBundleResult | null;
+  result: SequentialExecutionResult | null;
   isExecuting: boolean;
   reset: () => void;
 }
-
-const DEFAULT_TIP_LAMPORTS = 50_000; // 0.00005 SOL
 
 export function useAtomicSwapShort(): UseAtomicSwapShortResult {
   const { connection } = useConnection();
@@ -53,7 +51,7 @@ export function useAtomicSwapShort(): UseAtomicSwapShortResult {
     step: 'idle',
     message: 'Ready',
   });
-  const [result, setResult] = useState<JitoBundleResult | null>(null);
+  const [result, setResult] = useState<SequentialExecutionResult | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
 
   const reset = useCallback(() => {
@@ -63,11 +61,11 @@ export function useAtomicSwapShort(): UseAtomicSwapShortResult {
   }, []);
 
   const execute = useCallback(
-    async (config: AtomicOperationConfig): Promise<JitoBundleResult> => {
+    async (config: AtomicOperationConfig): Promise<SequentialExecutionResult> => {
       if (!publicKey || !signAllTransactions || !signTransaction) {
-        const errorResult: JitoBundleResult = {
-          bundleId: '',
+        const errorResult: SequentialExecutionResult = {
           success: false,
+          transactions: [],
           error: 'Wallet not connected',
         };
         setResult(errorResult);
@@ -83,48 +81,18 @@ export function useAtomicSwapShort(): UseAtomicSwapShortResult {
         transferAmount,
         targetAddress,
         depositAmount,
-        jitoTipLamports = DEFAULT_TIP_LAMPORTS,
       } = config;
 
-      const transactions: VersionedTransaction[] = [];
       let driftClient: DriftClient | null = null;
+      let expectedJup = 0;
 
       try {
-        // Step 1: Build Jupiter Swap Transaction (SOL → JUP)
+        // Initialize Drift client first (needed for building short transaction)
         setProgress({
-          step: 'building_swap',
-          message: `Building Jupiter swap: ${solAmount} SOL → JUP...`,
+          step: 'initializing',
+          message: 'Initializing Drift client...',
         });
 
-        const { transaction: swapTx, expectedOutput: expectedJup } = await buildJupiterSwapTransaction(
-          publicKey,
-          'SOL',
-          'JUP',
-          solAmount
-        );
-
-        //transactions.push(swapTx);
-
-        // Extract blockhash from Jupiter's transaction to use for all other transactions
-        // This ensures bundle atomicity - all transactions use the same blockhash
-        const sharedBlockhash = swapTx.message.recentBlockhash;
-        console.log('Using shared blockhash for bundle:', sharedBlockhash);
-
-        setProgress({
-          step: 'building_swap',
-          message: `Swap built: ${solAmount} SOL → ~${expectedJup.toFixed(4)} JUP`,
-          swapExpectedOutput: expectedJup,
-        });
-
-        // Step 2: Build Drift Short Transaction (with optional deposit)
-        const depositMsg = depositAmount ? ` (with ${depositAmount} USDC deposit)` : '';
-        setProgress({
-          step: 'building_short',
-          message: `Building Drift short: ${shortAmount} JUP-PERP${depositMsg}...`,
-          swapExpectedOutput: expectedJup,
-        });
-
-        // Initialize Drift client
         const browserWallet = new BrowserWallet(
           publicKey,
           signTransaction,
@@ -132,107 +100,128 @@ export function useAtomicSwapShort(): UseAtomicSwapShortResult {
         );
         driftClient = await initializeDriftClient(connection, browserWallet);
 
-        // Build short transaction with optional deposit included
-        // Pass sharedBlockhash to ensure all bundle transactions use the same blockhash
-        const shortTx = await buildDriftShortTransaction(
+        // Define transaction builders (lazy evaluation - each gets fresh blockhash)
+        const transactionBuilders: TransactionToBuild[] = [
+          {
+            name: 'Jupiter Swap',
+            build: async () => {
+              const { transaction, expectedOutput } = await buildJupiterSwapTransaction(
+                publicKey,
+                'SOL',
+                'JUP',
+                solAmount
+              );
+              expectedJup = expectedOutput;
+              return transaction;
+            },
+          },
+          {
+            name: 'Drift Short',
+            build: async () => {
+              return buildDriftShortTransaction(
+                connection,
+                publicKey,
+                driftClient!,
+                'JUP-PERP',
+                shortAmount,
+                depositAmount,
+                0
+              );
+            },
+          },
+          {
+            name: 'Token Transfer',
+            build: async () => {
+              return buildTokenTransferTransaction(
+                connection,
+                publicKey,
+                'JUP',
+                targetAddress,
+                transferAmount
+              );
+            },
+          },
+        ];
+
+        // Execute transactions sequentially
+        const sequentialResult = await executeTransactionsSequentially(
           connection,
-          publicKey,
-          driftClient,
-          'JUP-PERP',
-          shortAmount,
-          depositAmount, // Will be included in the same transaction if specified
-          0, // subAccountId
-          sharedBlockhash
+          signTransaction,
+          transactionBuilders,
+          (txProgress: TransactionProgress[]) => {
+            // Map transaction progress to UI progress
+            const signatures = txProgress
+              .filter((t) => t.signature)
+              .map((t) => t.signature!);
+
+            const currentTxIndex = txProgress.findIndex(
+              (t) => t.status !== 'confirmed' && t.status !== 'pending'
+            );
+            const currentTx = currentTxIndex >= 0 ? txProgress[currentTxIndex] : null;
+
+            if (currentTx) {
+              let step: AtomicOperationStep;
+              let message: string;
+
+              switch (currentTx.index) {
+                case 0:
+                  step = 'executing_swap';
+                  message = getSwapMessage(currentTx.status, solAmount, expectedJup);
+                  break;
+                case 1:
+                  step = 'executing_short';
+                  message = getShortMessage(currentTx.status, shortAmount, depositAmount);
+                  break;
+                case 2:
+                  step = 'executing_transfer';
+                  message = getTransferMessage(currentTx.status, transferAmount, targetAddress);
+                  break;
+                default:
+                  step = 'executing_swap';
+                  message = 'Processing...';
+              }
+
+              setProgress({
+                step,
+                message,
+                swapExpectedOutput: expectedJup,
+                currentTransaction: currentTx.index + 1,
+                totalTransactions: 3,
+                transactionSignatures: signatures,
+              });
+            }
+          }
         );
-        //transactions.push(shortTx);
 
         // Cleanup Drift client
         await cleanupDriftClient(driftClient);
         driftClient = null;
 
-        setProgress({
-          step: 'building_short',
-          message: `Short position built: ${shortAmount} JUP-PERP${depositMsg}`,
-          swapExpectedOutput: expectedJup,
-        });
+        if (sequentialResult.success) {
+          const signatures = sequentialResult.transactions
+            .filter((t) => t.signature)
+            .map((t) => t.signature!);
 
-        // Step 3: Build Token Transfer Transaction
-        setProgress({
-          step: 'building_transfer',
-          message: `Building JUP transfer: ${transferAmount} JUP → ${targetAddress.slice(0, 8)}...`,
-          swapExpectedOutput: expectedJup,
-        });
-
-        const transferTx = await buildTokenTransferTransaction(
-          connection,
-          publicKey,
-          'JUP',
-          targetAddress,
-          transferAmount,
-          sharedBlockhash
-        );
-        transactions.push(transferTx);
-
-        setProgress({
-          step: 'building_transfer',
-          message: `Transfer built: ${transferAmount} JUP`,
-          swapExpectedOutput: expectedJup,
-        });
-
-        // Step 4: Build Tip Transaction
-        setProgress({
-          step: 'building_tip',
-          message: `Building Jito tip: ${jitoTipLamports / 1e9} SOL...`,
-          swapExpectedOutput: expectedJup,
-        });
-
-        const tipTx = await createTipTransaction(
-          connection,
-          publicKey,
-          jitoTipLamports,
-          sharedBlockhash
-        );
-        transactions.push(tipTx);
-
-        // Step 5: Sign all transactions
-        setProgress({
-          step: 'signing',
-          message: `Please sign ${transactions.length} transactions in your wallet...`,
-          swapExpectedOutput: expectedJup,
-        });
-
-
-        const signedTransactions = await signAllTransactions(transactions);
-
-        // Step 6: Submit bundle
-        setProgress({
-          step: 'submitting',
-          message: 'Submitting bundle to Jito Block Engine...',
-          swapExpectedOutput: expectedJup,
-        });
-
-        const bundleResult = await submitAndConfirmBundle(
-          signedTransactions,
-          connection
-        );
-
-        if (bundleResult.success) {
           setProgress({
             step: 'success',
-            message: `Bundle confirmed! ID: ${bundleResult.bundleId}`,
+            message: 'All transactions confirmed!',
             swapExpectedOutput: expectedJup,
+            currentTransaction: 3,
+            totalTransactions: 3,
+            transactionSignatures: signatures,
           });
         } else {
+          const failedTx = sequentialResult.transactions[sequentialResult.failedAtIndex!];
           setProgress({
             step: 'error',
-            message: `Bundle failed: ${bundleResult.error}`,
+            message: `Failed at ${failedTx.name}: ${failedTx.error}`,
             swapExpectedOutput: expectedJup,
           });
         }
 
-        setResult(bundleResult);
+        setResult(sequentialResult);
         setIsExecuting(false);
-        return bundleResult;
+        return sequentialResult;
       } catch (error) {
         // Cleanup Drift client on error
         if (driftClient) {
@@ -240,9 +229,9 @@ export function useAtomicSwapShort(): UseAtomicSwapShortResult {
         }
 
         const errorMessage = error instanceof Error ? error.message : String(error);
-        const errorResult: JitoBundleResult = {
-          bundleId: '',
+        const errorResult: SequentialExecutionResult = {
           success: false,
+          transactions: [],
           error: errorMessage,
         };
 
@@ -265,4 +254,64 @@ export function useAtomicSwapShort(): UseAtomicSwapShortResult {
     isExecuting,
     reset,
   };
+}
+
+// Helper functions for generating progress messages
+function getSwapMessage(
+  status: string,
+  solAmount: number,
+  expectedJup: number
+): string {
+  switch (status) {
+    case 'building':
+      return `Building Jupiter swap: ${solAmount} SOL → JUP...`;
+    case 'signing':
+      return `Please sign swap transaction in your wallet...`;
+    case 'submitting':
+      return `Submitting swap: ${solAmount} SOL → ~${expectedJup.toFixed(4)} JUP...`;
+    case 'confirming':
+      return `Confirming swap transaction...`;
+    default:
+      return `Processing swap...`;
+  }
+}
+
+function getShortMessage(
+  status: string,
+  shortAmount: number,
+  depositAmount?: number
+): string {
+  const depositMsg = depositAmount ? ` (with ${depositAmount} USDC deposit)` : '';
+  switch (status) {
+    case 'building':
+      return `Building Drift short: ${shortAmount} JUP-PERP${depositMsg}...`;
+    case 'signing':
+      return `Please sign short position transaction in your wallet...`;
+    case 'submitting':
+      return `Submitting short position: ${shortAmount} JUP-PERP${depositMsg}...`;
+    case 'confirming':
+      return `Confirming short position transaction...`;
+    default:
+      return `Processing short position...`;
+  }
+}
+
+function getTransferMessage(
+  status: string,
+  transferAmount: number,
+  targetAddress: string
+): string {
+  const shortAddr = targetAddress.slice(0, 8);
+  switch (status) {
+    case 'building':
+      return `Building JUP transfer: ${transferAmount} JUP → ${shortAddr}...`;
+    case 'signing':
+      return `Please sign transfer transaction in your wallet...`;
+    case 'submitting':
+      return `Submitting transfer: ${transferAmount} JUP → ${shortAddr}...`;
+    case 'confirming':
+      return `Confirming transfer transaction...`;
+    default:
+      return `Processing transfer...`;
+  }
 }

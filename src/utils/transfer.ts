@@ -37,20 +37,19 @@ function kitInstructionToWeb3(kitInstruction: any) {
 
 /**
  * Build SPL token transfer transaction (unsigned) using Legacy Message
- * 
- * Uses Legacy Message instead of V0 to ensure Jito bundle compatibility
- * (Jito does not support Address Lookup Tables)
- * 
+ *
+ * Uses Legacy Message instead of V0 to ensure compatibility.
+ * Always fetches fresh blockhash for sequential execution.
+ *
  * Uses @solana/kit for ATA derivation and instruction building,
- * then converts to @solana/web3.js Legacy Message for Jito compatibility.
+ * then converts to @solana/web3.js Legacy Message.
  */
 export async function buildTokenTransferTransaction(
   connection: Connection,
   senderPublicKey: PublicKey,
   token: TokenTicker,
   recipientAddress: string,
-  amount: number,
-  recentBlockhash?: string
+  amount: number
 ): Promise<VersionedTransaction> {
   const mintAddressStr = TOKEN_ADDRESS[token];
   if (!mintAddressStr) {
@@ -118,8 +117,8 @@ export async function buildTokenTransferTransaction(
   });
   instructions.push(kitInstructionToWeb3(transferIx));
 
-  // Use provided blockhash or fetch new one
-  const blockhash = recentBlockhash ?? (await connection.getLatestBlockhash('confirmed')).blockhash;
+  // Always fetch fresh blockhash for sequential execution
+  const { blockhash } = await connection.getLatestBlockhash('confirmed');
 
   // Build transaction using Legacy Message (Jito compatible - no ALT)
   const legacyMessage = new TransactionMessage({

@@ -204,17 +204,16 @@ export async function buildDriftShortInstructions(
 
 /**
  * Build USDC deposit transaction (unsigned) using Legacy Message
- * 
- * Uses Legacy Message instead of V0 to ensure Jito bundle compatibility
- * (Jito does not support Address Lookup Tables)
+ *
+ * Uses Legacy Message instead of V0 to ensure compatibility.
+ * Always fetches fresh blockhash for sequential execution.
  */
 export async function buildDriftDepositTransaction(
   connection: Connection,
   userPublicKey: PublicKey,
   driftClient: DriftClient,
   usdcAmount: number,
-  subAccountId: number = 0,
-  recentBlockhash?: string
+  subAccountId: number = 0
 ): Promise<VersionedTransaction> {
   const instructions: TransactionInstruction[] = [];
 
@@ -245,8 +244,8 @@ export async function buildDriftDepositTransaction(
     microLamports: 1000,
   });
 
-  // Use provided blockhash or fetch new one
-  const blockhash = recentBlockhash ?? (await connection.getLatestBlockhash('confirmed')).blockhash;
+  // Always fetch fresh blockhash for sequential execution
+  const { blockhash } = await connection.getLatestBlockhash('confirmed');
 
   // Build transaction using Legacy Message (Jito compatible - no ALT support)
   const legacyMessage = new TransactionMessage({
@@ -265,9 +264,9 @@ export async function buildDriftDepositTransaction(
 
 /**
  * Build complete Drift short transaction with optional deposit (unsigned)
- * 
- * Uses Legacy Message instead of V0 to ensure Jito bundle compatibility
- * (Jito does not support Address Lookup Tables)
+ *
+ * Uses Legacy Message instead of V0 to ensure compatibility.
+ * Always fetches fresh blockhash for sequential execution.
  */
 export async function buildDriftShortTransaction(
   connection: Connection,
@@ -276,8 +275,7 @@ export async function buildDriftShortTransaction(
   marketName: string,
   baseAssetAmount: number,
   depositAmount?: number,
-  subAccountId: number = 0,
-  recentBlockhash?: string
+  subAccountId: number = 0
 ): Promise<VersionedTransaction> {
   const marketIndex = getPerpMarketIndex(marketName);
 
@@ -299,8 +297,8 @@ export async function buildDriftShortTransaction(
     microLamports: 1000,
   });
 
-  // Use provided blockhash or fetch new one
-  const blockhash = recentBlockhash ?? (await connection.getLatestBlockhash('confirmed')).blockhash;
+  // Always fetch fresh blockhash for sequential execution
+  const { blockhash } = await connection.getLatestBlockhash('confirmed');
 
   // Build transaction using Legacy Message (Jito compatible - no ALT support)
   const legacyMessage = new TransactionMessage({
